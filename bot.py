@@ -4,25 +4,20 @@
 ║   AUTONOMOUS BITCOIN TRADING SYSTEM — v12.0 FINAL                    ║
 ║   Single File · Plug & Play · Production Ready · Railway.app         ║
 ╠══════════════════════════════════════════════════════════════════════╣
-║  WHAT'S NEW IN V7 vs V6:                                             ║
-║  • Multi-Take-Profit: TP1 (40%), TP2 (35%), TP3 (25%) partial exits  ║
-║  • Dynamic ATR-based SL/TP scaling per regime & volatility           ║
-║  • Trailing SL upgrades: breakeven lock + ATR trail both active      ║
-║  • Smarter 68% gate: 12-rule scores + regime bonus/penalty           ║
-║  • Weekend & low-liquidity mode: tighter thresholds auto-applied     ║
-║  • Market session awareness: ASIA / LONDON / NY / OVERLAP weighting  ║
-║  • Enhanced paper→live: requires 1h AND 2 profitable paper trades    ║
-║  • Drawdown tiers: 3% caution (raise threshold), 5% paper, 30% stop  ║
-║  • Smarter reconciliation: actual Binance PnL on recovered positions  ║
-║  • Full position close on weekly limit or capital floor breach        ║
-║  • Signal diversity check: rejects trades when 4h+1h contradict      ║
-║  • 10-error type self-heal map (was 5); async heal non-blocking       ║
-║  • Watchdog: heartbeat + capital floor + open trade age check         ║
-║  • Dashboard V7: Capital chart (30d), equity curve, improved UI       ║
-║  • /api/equity endpoint for equity curve rendering                    ║
-║  • Performance stats: expectancy, profit factor, avg win/loss         ║
-║  • Tax: daily/monthly/annual, TDS auto-calc, net payable shown        ║
-║  • Telegram: richer alerts with P&L breakdown                         ║
+║  WHAT'S NEW IN V12 vs V11:                                           ║
+║  • Dynamic Risk Engine: 5/10/15/20/30% risk per probability tier     ║
+║  • Dynamic Confidence Gate: 2→70%, 3→75%, 5→80%, win→reset 62%      ║
+║  • Dynamic Leverage: 20/30/50/75x based on prob + regime + trend     ║
+║  • TP1 = 15% fee lock-in only (skips partial if qty < 0.001 BTC)     ║
+║  • 85% Adaptive Runner: rides trend with adaptive ATR trail           ║
+║  • Adaptive Trail Width: ADX≥30=1.5x wide, ADX<20=0.6x tight        ║
+║  • Bug Fix: trend_up now catches gradual uptrends (EMA21>EMA50)      ║
+║  • Bug Fix: trend_aligned blocks on 4H alone (not requiring 1H too)  ║
+║  • Strong trend bonus: +5pts when full EMA stack confirmed            ║
+║  • Win gate 62% base, conflict penalty 0.5x, score divisor 130       ║
+║  • Weekend + Asia session gates removed — BTC trades 24/7            ║
+║  • No directional bias — system picks highest-scoring side always    ║
+║  • All capital protection layers intact: 5%/15%/30% circuit breakers ║
 ║  • Single-file, zero manual changes needed to run                     ║
 ╠══════════════════════════════════════════════════════════════════════╣
 ║  DEPLOY IN 4 STEPS:                                                  ║
@@ -1820,7 +1815,7 @@ class TradingEngine:
            f"Direction: *{signal.direction}*\n"
            f"Entry: ${signal.entry:,.2f}\n"
            f"Stop Loss: ${signal.sl:,.2f}\n"
-           f"TP1: ${signal.tp1:,.2f} (40%) | TP2: ${signal.tp2:,.2f} (35%) | TP3: ${signal.tp3:,.2f} (25%)\n"
+           f"TP1: ${signal.tp1:,.2f} (15% lock) | Runner: ${signal.tp3:,.2f} (85% adaptive trail)\n"
            f"Qty: {qty} BTC | Leverage: {signal.leverage}×\n"
            f"Win Probability: {signal.prob}%\n"
            f"Regime: {regime_str} | Session: {sess}", "TRADE")
@@ -2975,7 +2970,7 @@ function setOT(d) {
     </div>
     <div class="row"><span class="rl">Entry</span><span class="rv">${f2(t.entry)}</span></div>
     <div class="row"><span class="rl">Stop Loss (trailing)</span><span class="rv loss">${f2(t.sl)}</span></div>
-    <div class="row"><span class="rl">TP1 40% ${p1c}</span><span class="rv profit">${f2(t.tp1)}</span></div>
+    <div class="row"><span class="rl">TP1 15% ${p1c}</span><span class="rv profit">${f2(t.tp1)}</span></div>
     <div class="row"><span class="rl">TP2 35% ${p2c}</span><span class="rv profit">${f2(t.tp2)}</span></div>
     <div class="row"><span class="rl">TP3 25% (runner)</span><span class="rv profit">${f2(t.tp3)}</span></div>
     <div class="row"><span class="rl">Remaining Qty</span><span class="rv">${t.qty_remaining||t.qty} / ${t.qty} BTC</span></div>
@@ -3141,7 +3136,7 @@ async def main():
        f"Fast scan: {CFG['SCAN_FAST_S']}s | 14 rules | Candle patterns: ON\n"
        f"Loss cooldown: REMOVED (V9) | IST daily reset: ON\n"
        f"Paper gate: {CFG['PAPER_HOURS']}h + {CFG['PAPER_MIN_TRADES']} wins\n"
-       f"Multi-TP: TP1 40% / TP2 35% / TP3 25%", "INFO")
+       f"Multi-TP: TP1 15% lock + 85% adaptive ATR runner", "INFO")
 
     await asyncio.gather(
         start_server(),
