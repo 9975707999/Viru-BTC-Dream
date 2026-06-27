@@ -535,8 +535,8 @@ def position_size(capital: float, entry: float,
                   regime_score: int = 50,
                   adx: float = 20.0) -> dict:
     """V12: Dynamic risk engine — position size scales with signal quality.
-    Always enforces Binance minimum (0.001 BTC).
-    Only fails if capital cannot cover required margin."""
+    Margin safety cap: qty is capped so margin never exceeds capital.
+    Always enforces Binance minimum (0.001 BTC)."""
     MIN_QTY  = 0.001   # Binance futures absolute minimum
 
     dist = abs(entry - sl)
@@ -557,9 +557,16 @@ def position_size(capital: float, entry: float,
     # Margin required at given leverage
     margin = round((entry * qty) / leverage, 2)
 
-    # Hard fail only if literally cannot afford margin
+    # MARGIN SAFETY CAP: if margin > capital, scale qty DOWN
+    # so margin = capital (use full capital as margin at max leverage)
     if margin > capital:
-        return {"qty": 0, "error": f"Insufficient capital: need ${margin:.2f} margin, have ${capital:.2f}"}
+        qty = round((capital * leverage) / entry, 3)
+        if qty < MIN_QTY:
+            qty = MIN_QTY
+        margin = round((entry * qty) / leverage, 2)
+        # Final check — if even minimum order needs more margin than capital
+        if margin > capital:
+            return {"qty": 0, "error": f"Capital too low for min order: need ${margin:.2f}, have ${capital:.2f}"}
 
     return {"qty": qty, "margin": margin, "error": None, "risk_pct": risk_pct}
 
@@ -3126,7 +3133,7 @@ async def main():
     logger.info("✓ Health     → /health (no auth — Railway uptime check)")
     logger.info(f"✓ DB path    → {_DATA_DIR}/trading.db")
     logger.info(f"✓ Self-Heal  → {'ENABLED' if CFG['SELF_HEAL'] else 'DISABLED'}")
-    logger.info(f"✓ Multi-TP   → TP1 {CFG['TP1_PCT']}% / TP2 {CFG['TP2_PCT']}% / TP3 remainder")
+    logger.info(f"✓ Multi-TP   → TP1 {CFG['TP1_PCT']}% fee-lock + 85% adaptive ATR runner")
     logger.info(f"✓ Paper gate → {CFG['PAPER_HOURS']}h + {CFG['PAPER_MIN_TRADES']} wins required")
     logger.info("✓ Starting trading engine, watchdog, dashboard…")
 
