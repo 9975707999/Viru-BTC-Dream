@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════════╗
-║   AUTONOMOUS BITCOIN TRADING SYSTEM — v12.0 FINAL                    ║
+║   AUTONOMOUS BITCOIN TRADING SYSTEM — v13.0 FINAL                    ║
 ║   Single File · Plug & Play · Production Ready · Railway.app         ║
 ╠══════════════════════════════════════════════════════════════════════╣
-║  WHAT'S NEW IN V12 vs V11:                                           ║
-║  • Dynamic Risk Engine: 5/10/15/20/30% risk per probability tier     ║
-║  • Dynamic Confidence Gate: 2→70%, 3→75%, 5→80%, win→reset 62%      ║
-║  • Dynamic Leverage: 20/30/50/75x based on prob + regime + trend     ║
-║  • TP1 = 15% fee lock-in only (skips partial if qty < 0.001 BTC)     ║
-║  • 85% Adaptive Runner: rides trend with adaptive ATR trail           ║
-║  • Adaptive Trail Width: ADX≥30=1.5x wide, ADX<20=0.6x tight        ║
-║  • Bug Fix: trend_up now catches gradual uptrends (EMA21>EMA50)      ║
-║  • Bug Fix: trend_aligned blocks on 4H alone (not requiring 1H too)  ║
-║  • Strong trend bonus: +5pts when full EMA stack confirmed            ║
-║  • Win gate 62% base, conflict penalty 0.5x, score divisor 130       ║
-║  • Weekend + Asia session gates removed — BTC trades 24/7            ║
-║  • No directional bias — system picks highest-scoring side always    ║
-║  • All capital protection layers intact: 5%/15%/30% circuit breakers ║
-║  • Single-file, zero manual changes needed to run                     ║
+║  WHAT'S NEW IN V13 vs V12:                                           ║
+║  • 4H Dominant Trend Bias: +15pts strong / +8pts moderate to winner  ║
+║  • Score tie-break: when scores within 15%, 4H trend decides         ║
+║  • Bull score + Bear score logged every scan                          ║
+║  • Dashboard Connection Health Panel: Binance status, last scan       ║
+║  • Dashboard Signal Monitor: bull/bear score, 4H trend, last signal   ║
+║  • Binance ping health check every 5 minutes                          ║
+║  • Scan counter per hour — proves bot is actively scanning            ║
+║  • Last rejection reason shown on dashboard                           ║
+║  • All V12 features: dynamic risk, leverage, TP1 15%, runner 85%     ║
 ╠══════════════════════════════════════════════════════════════════════╣
 ║  DEPLOY IN 4 STEPS:                                                  ║
 ║  1. Edit settings.env — replace YOUR_... with real values            ║
@@ -92,12 +87,12 @@ CFG = {
 
     # Risk
     "RISK_PCT":          _f("RISK_PER_TRADE_PCT",        "3.0"),   # base/fallback only
-    # V12: Dynamic risk tiers — overridden per trade based on signal probability
+    # V13: Dynamic risk tiers — overridden per trade based on signal probability
     # 62-69% → 5% | 70-74% → 10% | 75-79% → 15% | 80-84% → 20% | 85%+ → 30%
     "MAX_DAILY_LOSS":    _f("MAX_DAILY_LOSS_PCT",        "5.0"),
     "CAUTION_LOSS":      _f("CAUTION_LOSS_PCT",          "3.0"),
     "MIN_WIN_PROB":      _f("MIN_WIN_PROBABILITY",       "62.0"),
-    "MAX_LEVERAGE":      _i("MAX_LEVERAGE",              "75"),   # V12: up to 75x (hard cap)
+    "MAX_LEVERAGE":      _i("MAX_LEVERAGE",              "75"),   # V13: up to 75x (hard cap)
     "MAX_SPREAD_PCT":    _f("MAX_SPREAD_PCT",            "0.10"),
     "MAX_CONSEC_LOSS":   _i("MAX_CONSECUTIVE_LOSSES",   "5"),     # V9: raised 3→5
     # V9: No daily trade cap — system trades unlimited as long as no drawdown/loss guards hit
@@ -114,9 +109,9 @@ CFG = {
     "TP1_RATIO":         _f("TP1_ATR_RATIO",            "1.5"),
     "TP2_RATIO":         _f("TP2_ATR_RATIO",            "2.5"),
     "TP3_RATIO":         _f("TP3_ATR_RATIO",            "4.0"),
-    # V12: TP1=15% (fee recovery + lock profit), Runner=85% adaptive ATR trail
+    # V13: TP1=15% (fee recovery + lock profit), Runner=85% adaptive ATR trail
     "TP1_PCT":           _f("TP1_CLOSE_PCT",            "15.0"),  # small lock-in
-    "TP2_PCT":           _f("TP2_CLOSE_PCT",            "0.0"),   # V12: no fixed TP2 — runner rides trend
+    "TP2_PCT":           _f("TP2_CLOSE_PCT",            "0.0"),   # V13: no fixed TP2 — runner rides trend
     # TP3 gets the remainder automatically
 
     # Tax (India)
@@ -146,7 +141,7 @@ FUNDING_8H  = 0.0001   # 0.01% per 8h (conservative estimate)
 MIN_PROFIT  = 0.50     # minimum $0.50 net after all fees
 MIN_RR      = 1.5      # minimum Risk:Reward ratio
 
-VERSION = "12.0 FINAL"
+VERSION = "13.0 FINAL"
 
 # ═══════════════════════════════════════════════════════════════════
 # LOGGING
@@ -314,6 +309,18 @@ def db_init():
         "heal_attempts":      "0",
         "last_error_hash":    "",
         "system_version":     VERSION,
+        # V13: Connection health + signal transparency
+        "last_bull_score":    "0",
+        "last_bear_score":    "0",
+        "last_4h_trend":      "NEUTRAL",
+        "last_score_time":    "",
+        "last_signal_prob":   "0",
+        "last_signal_dir":    "",
+        "last_signal_time":   "",
+        "last_reject_reason": "",
+        "last_binance_ping":  "",
+        "scan_count_hour":    "0",
+        "scan_hour_start":    "",
         # V7 performance stats
         "total_gross":        "0.0",
         "total_fees":         "0.0",
@@ -515,7 +522,7 @@ def actual_pnl(direction: str, entry: float, exit_p: float,
 
 
 def dynamic_risk_pct(prob: float, regime_score: int, adx: float) -> float:
-    """V12: Risk percentage scales with signal quality.
+    """V13: Risk percentage scales with signal quality.
     62-69% → 5% | 70-74% → 10% | 75-79% → 15% | 80-84% → 20% | 85%+ → 30%
     Extra confirmation required for 30%: strong regime + high ADX."""
     if prob >= 85:
@@ -534,7 +541,7 @@ def position_size(capital: float, entry: float,
                   prob: float = 62.0,
                   regime_score: int = 50,
                   adx: float = 20.0) -> dict:
-    """V12: Dynamic risk engine — position size scales with signal quality.
+    """V13: Dynamic risk engine — position size scales with signal quality.
     Margin safety cap: qty is capped so margin never exceeds capital.
     Always enforces Binance minimum (0.001 BTC)."""
     MIN_QTY  = 0.001   # Binance futures absolute minimum
@@ -797,7 +804,7 @@ def detect_regime(tfs: dict) -> Regime:
 
     # V7: weekend penalty
     if datetime.utcnow().weekday() >= 5:
-        s -= 5   # V12: reduced weekend regime penalty
+        s -= 5   # V13: reduced weekend regime penalty
 
     return Regime(vol, trend, structure, max(0, min(100, s)), round(atr_pct, 4))
 
@@ -974,7 +981,7 @@ def generate_signal(tfs: dict, sentiment: float, regime: Regime) -> Signal:
     bull, bear = [], []
 
     # Rule 1: 4H trend — weight 15 (strong trend = 20)
-    # V12: uses relaxed trend_up (EMA21>EMA50 only) for detection
+    # V13: uses relaxed trend_up (EMA21>EMA50 only) for detection
     # but gives extra weight when full EMA alignment (incl EMA200) confirmed
     if bool(df4h["trend_up"].iloc[-1]):
         w = 20 if bool(df4h["trend_up_strong"].iloc[-1]) else 15
@@ -1085,14 +1092,58 @@ def generate_signal(tfs: dict, sentiment: float, regime: Regime) -> Signal:
 
     bull_score = sum(w for _, w in bull)
     bear_score = sum(w for _, w in bear)
-    TOTAL      = 130    # V12: adjusted to realistic max score
+    TOTAL      = 130    # V13: adjusted to realistic max score
 
-    # V8: harder conflict penalty
+    # V13: 4H DOMINANT TREND BIAS
+    # If 4H trend favours a direction, add bonus to that side's score
+    # This prevents short-term 15m noise from overriding the bigger trend
+    t4u_now = bool(df4h["trend_up"].iloc[-1])
+    t4d_now = bool(df4h["trend_down"].iloc[-1])
+    t4u_str = bool(df4h["trend_up_strong"].iloc[-1]) if "trend_up_strong" in df4h.columns else False
+    t4d_str = bool(df4h["trend_down_strong"].iloc[-1]) if "trend_down_strong" in df4h.columns else False
+
+    if t4u_str:   bull_score += 15   # strong 4H uptrend → significant BUY bias
+    elif t4u_now: bull_score += 8    # moderate 4H uptrend → mild BUY bias
+    if t4d_str:   bear_score += 15   # strong 4H downtrend → significant SHORT bias
+    elif t4d_now: bear_score += 8    # moderate 4H downtrend → mild SHORT bias
+
+    # V13: If scores within 15% of each other, prefer 4H trend direction
+    score_gap = abs(bull_score - bear_score)
+    score_max = max(bull_score, bear_score)
+    scores_close = score_max > 0 and (score_gap / score_max) < 0.15
+
+    # Log bull vs bear scores every scan for dashboard transparency
+    logger.info(f"SCORES | Bull: {bull_score} | Bear: {bear_score} | 4H: {'UP' if t4u_now else 'DOWN' if t4d_now else 'NEUTRAL'} | Gap: {score_gap}")
+    kset("last_bull_score",  str(bull_score))
+    kset("last_bear_score",  str(bear_score))
+    kset("last_4h_trend",    "UP" if t4u_now else "DOWN" if t4d_now else "NEUTRAL")
+    kset("last_score_time",  datetime.utcnow().isoformat())
+
     conflict = min(bull_score, bear_score) * 0.5
 
-    if   bull_score > bear_score: direction = "BUY";   raw = bull_score - conflict; factors = bull
-    elif bear_score > bull_score: direction = "SHORT";  raw = bear_score - conflict; factors = bear
-    else: return _none("Signals balanced — no clear direction")
+    if   bull_score > bear_score:
+        direction = "BUY"
+        raw = bull_score - conflict
+        factors = bull
+    elif bear_score > bull_score:
+        direction = "SHORT"
+        raw = bear_score - conflict
+        factors = bear
+    else:
+        return _none("Signals balanced — no clear direction")
+
+    # V13: If scores very close, override with 4H trend direction
+    if scores_close:
+        if t4u_now and direction == "SHORT":
+            direction = "BUY"
+            raw = bull_score - conflict
+            factors = bull
+            logger.info("SCORE TIE → 4H uptrend bias overrides to BUY")
+        elif t4d_now and direction == "BUY":
+            direction = "SHORT"
+            raw = bear_score - conflict
+            factors = bear
+            logger.info("SCORE TIE → 4H downtrend bias overrides to SHORT")
 
     # Trend conflict block (unchanged from V7)
     aligned, conflict_reason = trend_aligned(tfs, direction)
@@ -1109,11 +1160,11 @@ def generate_signal(tfs: dict, sentiment: float, regime: Regime) -> Signal:
     sess       = get_session()
     sess_score = SESSION_SCORES.get(sess, 50)
     if   sess_score >= 90: raw += 4
-    elif sess_score < 50:  raw -= 3   # V12: reduced Asia penalty
+    elif sess_score < 50:  raw -= 3   # V13: reduced Asia penalty
 
     prob = min(95.0, (raw / TOTAL) * 100 * 1.4)
 
-    # V12: Dynamic confidence threshold — escalates after losses, resets on win
+    # V13: Dynamic confidence threshold — escalates after losses, resets on win
     # Replaces blunt paper-mode jump with graduated selectivity
     threshold  = CFG["MIN_WIN_PROB"]   # base: 62%
     day_start  = float(kget("day_start_cap", str(CFG["INITIAL_CAPITAL"])))
@@ -1154,7 +1205,7 @@ def generate_signal(tfs: dict, sentiment: float, regime: Regime) -> Signal:
     if direction == "BUY"   and (price - sl) > max_sl_dist: sl = price - max_sl_dist
     if direction == "SHORT" and (sl - price) > max_sl_dist: sl = price + max_sl_dist
 
-    # V12: Dynamic leverage — scales with probability AND regime
+    # V13: Dynamic leverage — scales with probability AND regime
     # Hard cap: 75x (125x too close to liquidation for volatile BTC)
     strong_trend = regime.trend in ("STRONG_UP", "STRONG_DOWN")
     good_regime  = regime.score >= 60
@@ -1577,6 +1628,26 @@ class TradingEngine:
         while True:
             try:
                 kset("last_heartbeat", datetime.utcnow().isoformat())
+                # V13: Track scan count per hour for dashboard health
+                now_h = datetime.utcnow().strftime("%Y-%m-%dT%H")
+                if kget("scan_hour_start") != now_h:
+                    kset("scan_hour_start", now_h)
+                    kset("scan_count_hour", "0")
+                kset("scan_count_hour", str(int(kget("scan_count_hour","0")) + 1))
+                # V13: Binance ping health check every 5 minutes
+                last_ping = kget("last_binance_ping", "")
+                ping_stale = True
+                if last_ping:
+                    try:
+                        ping_stale = (datetime.utcnow() - datetime.fromisoformat(last_ping)).total_seconds() > 300
+                    except Exception:
+                        pass
+                if ping_stale:
+                    try:
+                        get_client().ping()
+                        kset("last_binance_ping", datetime.utcnow().isoformat())
+                    except Exception as e:
+                        kset("last_binance_ping", f"ERROR:{str(e)[:50]}")
                 # V8: IST daily reset
                 curr_ist = today_ist()
                 if curr_ist != self._last_ist_date:
@@ -1711,12 +1782,17 @@ class TradingEngine:
         signal = generate_signal(tfs, self._sentiment, regime)
         if signal.direction == "NONE":
             logger.debug(f"No signal: {signal.reason}")
+            kset("last_reject_reason", signal.reason[:100] if signal.reason else "No signal")
             return
+        # V13: Track last signal found
+        kset("last_signal_prob", str(signal.prob))
+        kset("last_signal_dir",  signal.direction)
+        kset("last_signal_time", datetime.utcnow().isoformat())
 
         # ── SPREAD + FUNDING FILTERS ─────────────────────────────
         sp_ok, sp_pct = spread_ok()
         if not sp_ok:
-            _log_signal(signal, "SKIPPED_FILTER", "Spread too wide")
+            _log_signal(signal, "SKIPPED_FILTER", "Spread too wide"); kset("last_reject_reason", "Spread too wide")
             return
 
         # V8 FIX: Funding rate thresholds raised — 0.001 not 0.0003
@@ -1751,7 +1827,7 @@ class TradingEngine:
             signal.tp1, signal.tp2, signal.tp3,
             qty, signal.prob)
         if not viable.viable:
-            _log_signal(signal, "SKIPPED_FEES", viable.reason)
+            _log_signal(signal, "SKIPPED_FEES", viable.reason); kset("last_reject_reason", f"Fee gate: {viable.reason[:60]}")
             return
 
         _log_signal(signal, "TAKEN")
@@ -1852,7 +1928,7 @@ class TradingEngine:
                 (trade.direction == "SHORT" and price <= trade.take_profit1)
             )
             if tp1_triggered:
-                # V12: TP1 = 15% of position — only if qty meets Binance minimum
+                # V13: TP1 = 15% of position — only if qty meets Binance minimum
                 tp1_qty = round(trade.quantity * (CFG["TP1_PCT"] / 100), 3)
                 tp1_qty = min(tp1_qty, qty_remaining)
                 if tp1_qty >= 0.001:
@@ -1899,7 +1975,7 @@ class TradingEngine:
                 db.commit()
                 return
 
-        # ── V12: NO FIXED TP2 — 85% RUNNER WITH ADAPTIVE ATR TRAIL ──
+        # ── V13: NO FIXED TP2 — 85% RUNNER WITH ADAPTIVE ATR TRAIL ──
         # After TP1, remaining position rides trend with adaptive trailing stop.
         # Trail width adjusts based on trend strength: strong=wider, weak=tighter.
         qty_remaining = trade.qty_remaining or trade.quantity
@@ -2334,6 +2410,17 @@ def api_status(_=Depends(_auth)):
         "avg_loss":     avg_loss,
         "profit_factor":profit_factor,
         "session":      get_session(),
+        # V13: Connection health + signal transparency
+        "last_bull_score":    kget("last_bull_score",  "0"),
+        "last_bear_score":    kget("last_bear_score",  "0"),
+        "last_4h_trend":      kget("last_4h_trend",    "NEUTRAL"),
+        "last_score_time":    kget("last_score_time",  ""),
+        "last_signal_prob":   kget("last_signal_prob", "0"),
+        "last_signal_dir":    kget("last_signal_dir",  ""),
+        "last_signal_time":   kget("last_signal_time", ""),
+        "last_reject_reason": kget("last_reject_reason",""),
+        "last_binance_ping":  kget("last_binance_ping",""),
+        "scan_count_hour":    int(kget("scan_count_hour","0")),
     }
 
 
@@ -2607,7 +2694,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BTC Trading System v12 FINAL</title>
+<title>BTC Trading System v13 FINAL</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',sans-serif;background:#050c18;color:#dde6f0;min-height:100vh}
@@ -2673,7 +2760,7 @@ svg.echart{width:100%;height:100%}
 <body>
 <div class="hdr">
   <div>
-    <div class="hdr h1">₿ Autonomous BTC Trading System v12.0 FINAL</div>
+    <div class="hdr h1">₿ Autonomous BTC Trading System v13.0 FINAL</div>
     <div class="sub">Multi-TP · Self-Healing · Capital Protected · Exponential Growth · Railway Ready</div>
   </div>
   <div id="ts" style="font-size:10px;color:#4d9fd5;text-align:right"></div>
@@ -2724,6 +2811,22 @@ svg.echart{width:100%;height:100%}
   <div class="chart-wrap">
     <svg class="echart" id="echart" viewBox="0 0 300 100" preserveAspectRatio="none"></svg>
   </div>
+</div>
+
+<!-- V13: CONNECTION HEALTH PANEL -->
+<div class="card">
+  <h3>🔌 Connection Health & Signal Monitor</h3>
+  <div class="row"><span class="rl">Binance API</span><span class="rv" id="bpstatus">—</span></div>
+  <div class="row"><span class="rl">Last Binance Ping</span><span class="rv muted" id="bping">—</span></div>
+  <div class="row"><span class="rl">Last Scan</span><span class="rv" id="lastscan">—</span></div>
+  <div class="row"><span class="rl">Scans This Hour</span><span class="rv" id="scanhour">—</span></div>
+  <hr class="divider">
+  <div class="row"><span class="rl">4H Trend</span><span class="rv" id="trend4h">—</span></div>
+  <div class="row"><span class="rl">🟢 BUY Score</span><span class="rv profit" id="bullscore">—</span></div>
+  <div class="row"><span class="rl">🔴 SHORT Score</span><span class="rv loss" id="bearscore">—</span></div>
+  <div class="row"><span class="rl">Last Signal</span><span class="rv" id="lastsig">—</span></div>
+  <div class="row"><span class="rl">Last Signal Time</span><span class="rv muted" id="lastsigtime">—</span></div>
+  <div class="row"><span class="rl">Last Rejection</span><span class="rv warn" id="lastrej">—</span></div>
 </div>
 
 <!-- OPEN TRADE -->
@@ -2948,6 +3051,53 @@ function setSt(d) {
   document.getElementById('awv').textContent = d.avg_win  ? f4(d.avg_win)  : '—';
   document.getElementById('alv').textContent = d.avg_loss ? f4(d.avg_loss) : '—';
   document.getElementById('ver').textContent = 'v' + (d.version||'7.0');
+
+  // V13: Connection health panel
+  // Binance ping status
+  const bp = d.last_binance_ping || '';
+  const bpEl = document.getElementById('bpstatus');
+  const bpTimeEl = document.getElementById('bping');
+  if (!bp) {
+    bpEl.textContent = '⏳ Not checked yet'; bpEl.className='rv warn';
+  } else if (bp.startsWith('ERROR')) {
+    bpEl.textContent = '🔴 DISCONNECTED'; bpEl.className='rv loss';
+    bpTimeEl.textContent = bp.replace('ERROR:','');
+  } else {
+    bpEl.textContent = '🟢 CONNECTED'; bpEl.className='rv profit';
+    try { bpTimeEl.textContent = new Date(bp).toLocaleTimeString(); } catch(e){}
+  }
+  // Last scan (from heartbeat)
+  const hb = d.heartbeat || '';
+  const scanEl = document.getElementById('lastscan');
+  if (hb) {
+    try {
+      const secs = Math.floor((Date.now() - new Date(hb).getTime()) / 1000);
+      if (secs < 30) { scanEl.textContent = secs+'s ago'; scanEl.className='rv profit'; }
+      else if (secs < 120) { scanEl.textContent = secs+'s ago ⚠️'; scanEl.className='rv warn'; }
+      else { scanEl.textContent = secs+'s ago 🔴 STALE'; scanEl.className='rv loss'; }
+    } catch(e) { scanEl.textContent = '—'; }
+  }
+  document.getElementById('scanhour').textContent = (d.scan_count_hour||0) + ' scans/hr';
+  // 4H trend and scores
+  const t4 = d.last_4h_trend || 'NEUTRAL';
+  const t4El = document.getElementById('trend4h');
+  t4El.textContent = t4;
+  t4El.className = 'rv ' + (t4==='UP'?'profit':t4==='DOWN'?'loss':'muted');
+  document.getElementById('bullscore').textContent = d.last_bull_score || '0';
+  document.getElementById('bearscore').textContent = d.last_bear_score || '0';
+  // Last signal
+  const lsd = d.last_signal_dir || '';
+  const lsp = d.last_signal_prob || '0';
+  const lsEl = document.getElementById('lastsig');
+  if (lsd) {
+    lsEl.textContent = lsd + ' @ ' + lsp + '%';
+    lsEl.className = 'rv ' + (lsd==='BUY'?'profit':'loss');
+  } else { lsEl.textContent = 'None yet'; lsEl.className='rv muted'; }
+  try {
+    const lst = d.last_signal_time;
+    if (lst) document.getElementById('lastsigtime').textContent = new Date(lst).toLocaleTimeString();
+  } catch(e){}
+  document.getElementById('lastrej').textContent = d.last_reject_reason || '—';
 
   const pr = document.getElementById('paper-row');
   if (d.mode === 'PAPER') {
