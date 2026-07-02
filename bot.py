@@ -1247,7 +1247,7 @@ def generate_signal(tfs: dict, sentiment: float, regime: Regime) -> Signal:
     kset("last_4h_trend",    "UP" if t4u_now else "DOWN" if t4d_now else "NEUTRAL")
     kset("last_score_time",  datetime.utcnow().isoformat())
 
-    conflict = min(bull_score, bear_score) * 0.5
+    conflict = min(bull_score, bear_score) * 0.25
 
     if   bull_score > bear_score:
         direction = "BUY"
